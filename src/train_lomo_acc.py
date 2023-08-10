@@ -23,6 +23,10 @@ from mydatasets import MyDataset, get_dataset_info
 from lomo_trainer import LOMOTrainer
 from utils import DataCollatorForCauselLM, EvalDataCollatorForCauselLM
 
+from accelerate.utils import get_balanced_memory, infer_auto_device_map, find_tied_parameters
+from accelerate import init_empty_weights, load_checkpoint_and_dispatch
+from accelerate import dispatch_model
+
 import pdb
 
 def compute_metrics(all_pred, eval_dataset, eval_prefix=None):
@@ -86,6 +90,17 @@ def train():
     config.gradient_checkpointing = training_args.gradient_checkpointing
     if training_args.resume_from_checkpoint is not None:
         print(f'Load checkpoint from {training_args.resume_from_checkpoint}.')
+
+
+    mconfig = AutoConfig.from_pretrained(model_args.model_name_or_path, trust_remote_code=True)
+    with init_empty_weights():
+        model = AutoModelForCausalLM.from_config(mconfig, trust_remote_code=True)
+    model.tie_weights()
+    # find_tied_parameters(model)
+    device_map = infer_auto_device_map(model, dtype=torch.int8, no_split_module_classes=model._no_split_modules)
+    max_memory =  get_balanced_memory(model)
+    print('device_map', device_map)
+    print('max_memory', max_memory)
 
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path if training_args.resume_from_checkpoint is None else training_args.resume_from_checkpoint,

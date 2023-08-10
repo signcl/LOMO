@@ -1,0 +1,10 @@
+absl-py==1.4.0
+accept-types==0.4.1
+addict==2.4.0
+deepspeed
+transformers
+sentencepiece
+peft
+wandb
+rich
+datasets

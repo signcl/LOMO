@@ -12,7 +12,7 @@ from transformers import set_seed
 from dataclasses import asdict
 from transformers.deepspeed import HfDeepSpeedConfig
 import wandb
-os.environ['WANDB_MODE'] = 'dryrun'
+# os.environ['WANDB_MODE'] = 'debug'
 
 python_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 print("PYTHON_PATH", python_path)
@@ -78,7 +78,7 @@ def train():
             name=tag_name if hparam_name == 'output' else '_'.join([tag_name, hparam_name.replace('output_', '')]),
             config=wandb_config
         )
-    
+
     # ========== 2. Load pretrained model and tokenizer. ==========
     ds_config = training_args.deepspeed
     dschf = HfDeepSpeedConfig(ds_config)
@@ -86,7 +86,6 @@ def train():
     config.gradient_checkpointing = training_args.gradient_checkpointing
     if training_args.resume_from_checkpoint is not None:
         print(f'Load checkpoint from {training_args.resume_from_checkpoint}.')
-
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path if training_args.resume_from_checkpoint is None else training_args.resume_from_checkpoint,
         local_files_only=True,

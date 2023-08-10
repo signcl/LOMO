@@ -12,6 +12,7 @@ from transformers import set_seed
 from dataclasses import asdict
 from transformers.deepspeed import HfDeepSpeedConfig
 import wandb
+# os.environ['WANDB_MODE'] = 'debug'
 os.environ['WANDB_MODE'] = 'dryrun'
 
 python_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
@@ -19,14 +20,14 @@ print("PYTHON_PATH", python_path)
 sys.path.append(python_path)
 from log import print
 from arguments import ModelArguments, DataArguments, MyTrainingArguments
-from mydatasets import MyDataset, get_dataset_info
-from lomo_trainer import LOMOTrainer
+# from mydatasets import MyDataset, get_dataset_info
+from obdatasets import OBDataset
+from lomo_trainer_bf16 import LOMOTrainer
 from utils import DataCollatorForCauselLM, EvalDataCollatorForCauselLM
 
-import pdb
 
 def compute_metrics(all_pred, eval_dataset, eval_prefix=None):
-    golds = [ins['answer'] for ins in eval_dataset.data]
+    golds = [ins['labels'] for ins in eval_dataset.data]
     preds = all_pred[:len(golds)]
 
     acc = round(sum([int(pred == gold) for pred, gold in zip(preds, golds)]) / len(golds), 6)
@@ -36,7 +37,7 @@ def compute_metrics(all_pred, eval_dataset, eval_prefix=None):
 
 def train():
     # ========== 1. logs and args ==========
-    torch.set_default_dtype(torch.float16)
+    torch.set_default_dtype(torch.bfloat16)
     parser = HfArgumentParser((ModelArguments, DataArguments, MyTrainingArguments))
     if sys.argv[-1].endswith(".yaml"):
         model_args, data_args, training_args = parser.parse_yaml_file(yaml_file=os.path.abspath(sys.argv[-1]))
@@ -86,25 +87,28 @@ def train():
     config.gradient_checkpointing = training_args.gradient_checkpointing
     if training_args.resume_from_checkpoint is not None:
         print(f'Load checkpoint from {training_args.resume_from_checkpoint}.')
-
     model = AutoModelForCausalLM.from_pretrained(
         model_args.model_name_or_path if training_args.resume_from_checkpoint is None else training_args.resume_from_checkpoint,
+        #torch_dtype=torch.bfloat16,
         local_files_only=True,
         config=config,
     )
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.model_name_or_path,
+        #torch_dtype=torch.bfloat16,
         use_fast=False,
         padding_side='left'
     )
     tokenizer.pad_token_id = 0
 
     # ========== 3. Preprocessing the datasets. ==========
-    dataset_info = get_dataset_info(data_args.dataset_name)
-    train_dataset = MyDataset(data_args, tokenizer, dataset_info, split=dataset_info.exemplar_split)
-    eval_dataset = MyDataset(data_args, tokenizer, dataset_info, split=dataset_info.eval_split)
+    # train_dataset = MyDataset(data_args, tokenizer, dataset_info, split=dataset_info.exemplar_split)
+    # eval_dataset = MyDataset(data_args, tokenizer, dataset_info, split=dataset_info.eval_split)
 
+    train_dataset = OBDataset('/data/data/parsed_dataset/first_val.json')
+    eval_dataset = OBDataset('/data/data/parsed_dataset/first_val.json')
+    
     # ========== 4. Initialize our Trainer. ==========
     trainer = LOMOTrainer(
         model=model,
