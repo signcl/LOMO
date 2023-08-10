@@ -1,12 +1,22 @@
+import io
 import copy
+import json
 from dataclasses import dataclass
 
 import numpy as np
-from torch.nn import CrossEntropyLoss
+from torch.nn import CrossEntropyLoss, MSELoss
 from transformers.utils import PaddingStrategy
 from transformers.trainer import *
 import wandb
 
+def jload(f):
+    with open(f, 'r') as file:
+        jdict = []
+        for line in file:
+            data = json.loads(line)
+            jdict.append(data)
+    print('data count:', len(jdict))
+    return jdict
 
 @dataclass
 class DataCollatorForCauselLM:
@@ -76,17 +86,26 @@ class DataCollatorForCauselLM:
                 else:
                     feature["labels"] = np.concatenate([remainder, feature["labels"]]).astype(np.int64)
 
+        # for i in range(len(features)):
+        #     features[i]['input_ids'] = features[i]['input_ids'][:self.max_length]
+        #     features[i]['labels'] = features[i]['labels'][:self.max_length]
+
         max_length = max(len(feature['input_ids']) for feature in features)
+        max_length_o = max(len(feature['labels']) for feature in features)
         if padding_side == 'right':
             input_ids = [feature['input_ids'] + [self.tokenizer.pad_token_id] * (max_length - len(feature['input_ids']))
                          for feature in features]
             attention_mask = [[1] * len(feature['input_ids']) + [0] * (max_length - len(feature['input_ids'])) for
                               feature in features]
+            # labels = [feature['labels'] + [self.tokenizer.pad_token_id] * (max_length_o - len(feature['labels']))
+            #              for feature in features]
         elif padding_side == 'left':
             input_ids = [[self.tokenizer.pad_token_id] * (max_length - len(feature['input_ids'])) + feature['input_ids']
                          for feature in features]
             attention_mask = [[0] * (max_length - len(feature['input_ids'])) + [1] * len(feature['input_ids']) for
                               feature in features]
+            # labels = [feature['labels'] + [self.tokenizer.pad_token_id] * (max_length_o - len(feature['labels']))
+            #              for feature in features]
         else:
             raise ValueError("Invalid padding strategy:" + str(padding_side))
 
@@ -94,6 +113,7 @@ class DataCollatorForCauselLM:
             'input_ids': torch.tensor(input_ids).long(),
             'attention_mask': torch.tensor(attention_mask).long(),
             'labels': torch.tensor(np.array([feature['labels'] for feature in features])).long()
+            # 'labels': torch.tensor(labels).long(),#torch.tensor(np.array([feature['labels'] for feature in features])).long()
         }
         return features
 
@@ -145,13 +165,24 @@ class EvalDataCollatorForCauselLM:
         split_size = []
         new_features = []
         assert "labels" in features[0].keys()
+
+        for i in range(len(features)):
+            features[i]['input_ids'] = features[i]['input_ids'][:self.max_length]
+            features[i]['labels'] = features[i]['labels'][:self.max_length]
+
+        # print('\n features', features)
         for feature in features:
             split_size.append(len(feature["labels"]))
-            for op_input_ids, op_labels in zip(feature["input_ids"], feature["labels"]):
-                un_mask = np.zeros_like(op_labels)
-                un_mask_index = np.where(op_labels == self.label_pad_token_id, 1, 0).sum() - 2
-                un_mask[:un_mask_index] = 1
-                new_features.append({"input_ids": op_input_ids, "labels": op_labels, "un_mask": un_mask})
+            op_input_ids = feature["input_ids"]
+            op_labels = feature["labels"]
+            # for op_input_ids, op_labels in zip(feature["input_ids"], feature["labels"]):
+            # print('\n op_labels', op_labels)
+            un_mask = np.zeros_like(op_labels)
+            # print('\n un_mask.shape', un_mask.shape)
+            un_mask_index = np.where(op_labels == self.label_pad_token_id, 1, 0).sum() - 2
+            # print('\n un_mask_index', un_mask_index)
+            un_mask[:un_mask_index] = 1
+            new_features.append({"input_ids": op_input_ids, "labels": op_labels, "un_mask": un_mask})
 
         labels = [feature["labels"] for feature in new_features]
         # We have to pad the labels before calling `tokenizer.pad` as this method won't pad them and needs them of the
@@ -184,6 +215,8 @@ class EvalDataCollatorForCauselLM:
                          for feature in new_features]
             attention_mask = [[1] * len(feature['input_ids']) + [0] * (max_length - len(feature['input_ids'])) for
                               feature in new_features]
+            labels = [feature['labels'] + [self.tokenizer.pad_token_id] * (max_length - len(feature['labels']))
+                         for feature in features]
         elif padding_side == 'left':
             input_ids = [[self.tokenizer.pad_token_id] * (max_length - len(feature['input_ids'])) + feature['input_ids']
                          for feature in new_features]
@@ -366,7 +399,7 @@ class DynamicLossScaler:
 
 
 def get_loss(logits, labels, clip_loss_value=None):
-    # Shift so that tokens < n predict n
+    # Shift so that tokens < n predict ns
     shift_logits = logits[..., :-1, :].contiguous()
     shift_labels = labels[:, 1:].contiguous()
     # Flatten the tokens
@@ -378,6 +411,13 @@ def get_loss(logits, labels, clip_loss_value=None):
         loss = loss.mean()
     else:
         loss_fct = CrossEntropyLoss()
-        loss = loss_fct(shift_logits.view(shift_labels.shape[0] * shift_labels.shape[1], -1),
-                        shift_labels.view(-1).cuda())
+
+        shift_logits = shift_logits.view(-1, logits.shape[-1])
+        shift_labels = shift_labels.view(-1)
+        # Enable model parallelism
+        shift_labels = shift_labels.to(shift_logits.device)
+        loss = loss_fct(shift_logits, shift_labels)
+        
+        # loss = loss_fct(shift_logits.view(shift_labels.shape[0] * shift_labels.shape[1], -1),
+        #                 shift_labels.view(-1).cuda())
     return loss
